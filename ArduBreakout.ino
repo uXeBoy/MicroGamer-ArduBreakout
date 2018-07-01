@@ -4,6 +4,7 @@
  All rights reserved.
 
  Modifications by Scott Allen 2016 (after previous changes by ???)
+ Adapted for the Micro:Gamer by Dan O'Shea 2018
 
  This library is free software; you can redistribute it and/or
  modify it under the terms of the GNU Lesser General Public
@@ -11,15 +12,25 @@
  version 2.1 of the License, or (at your option) any later version.
  */
 
-#include <Arduboy2.h>
+#include "MMA8653.h"
 
-// block in EEPROM to save high scores
-#define EE_FILE 2
+#include <MicroGamer.h>
+#include "MicroGamerTones.h"
+#include <MicroGamerMemoryCard.h>
 
-Arduboy2 arduboy;
-BeepPin1 beep;
+#define BASE_FRAME_RATE (30)
+#define MENU_FRAME_RATE (8)
+#define NBR_HIGH_SCORES (7)
 
-const unsigned int FRAME_RATE = 40; // Frame rate in frames per second
+#define Y_BUTTON (1<<5)     /**< The Y button value for functions requiring a bitmask */
+#define X_BUTTON (1<<6)     /**< The X button value for functions requiring a bitmask */
+
+MMA8653 accel;
+
+MicroGamer arduboy;
+MicroGamerTones audio(arduboy.audio.enabled);
+MicroGamerMemoryCard mem(64/4);
+
 const unsigned int COLUMNS = 13; //Columns of bricks
 const unsigned int ROWS = 4;     //Rows of bricks
 int dx = -1;        //Initial movement of ball
@@ -37,10 +48,10 @@ unsigned int score=0;   //Score for the game
 unsigned int brickCount;  //Amount of bricks hit
 boolean pad, pad2, pad3;  //Button press buffer used to stop pause repeating
 boolean oldpad, oldpad2, oldpad3;
-char text_buffer[16];      //General string buffer
 boolean start=false;    //If in menu or in game
 boolean initialDraw=false;//If the inital draw has happened
 char initials[3];     //Initials used in high score
+char s[16]; // general string buffer
 
 //Ball Bounds used in collision detection
 byte leftBall;
@@ -58,10 +69,12 @@ byte tick;
 
 void setup()
 {
-  arduboy.begin();
-  beep.begin();
-  arduboy.setFrameRate(FRAME_RATE);
-  arduboy.initRandomSeed();
+  arduboy.boot();
+  arduboy.setFrameRate(BASE_FRAME_RATE);
+
+  accel.begin(false, 2); // 8-bit mode, 2g range
+  accel.update();
+  randomSeed(accel.getX() + accel.getY() + accel.getZ());
 }
 
 void loop()
@@ -70,9 +83,6 @@ void loop()
   if (!(arduboy.nextFrame()))
     return;
 
-  // Handle the timing and stopping of tones
-  beep.timer();
-
   //Title screen loop switches from title screen
   //and high scores until FIRE is pressed
   while (!start)
@@ -80,7 +90,7 @@ void loop()
     start = titleScreen();
     if (!start)
     {
-      start = displayHighScores(EE_FILE);
+      start = displayHighScores(1);
     }
   }
 
@@ -92,9 +102,9 @@ void loop()
     //Selects Font
     //Draws the new level
     level = 1;
+    initialDraw=true;
     newLevel();
     score = 0;
-    initialDraw=true;
   }
 
   if (lives>0)
@@ -102,7 +112,7 @@ void loop()
     drawPaddle();
 
     //Pause game if FIRE pressed
-    pad = arduboy.pressed(A_BUTTON) || arduboy.pressed(B_BUTTON);
+    pad = arduboy.pressed(Y_BUTTON) || arduboy.pressed(X_BUTTON);
 
     if(pad == true && oldpad == false && released)
     {
@@ -124,7 +134,7 @@ void loop()
     drawGameOver();
     if (score > 0)
     {
-      enterHighScore(EE_FILE);
+      enterHighScore(1);
     }
 
     arduboy.clear();
@@ -139,21 +149,24 @@ void loop()
 
 void movePaddle()
 {
+  arduboy.waitDisplayUpdate();
+  accel.update();
+
   //Move right
   if(xPaddle < WIDTH - 12)
   {
-    if (arduboy.pressed(RIGHT_BUTTON))
+    if (accel.getX() > 10)
     {
-      xPaddle+=2;
+      xPaddle+=3;
     }
   }
 
   //Move left
   if(xPaddle > 0)
   {
-    if (arduboy.pressed(LEFT_BUTTON))
+    if (accel.getX() < -10)
     {
-      xPaddle-=2;
+      xPaddle-=3;
     }
   }
 }
@@ -185,7 +198,7 @@ void moveBall()
     {
       yb = 2;
       dy = -dy;
-      playTone(523, 250);
+      audio.tone(523, 250);
     }
 
     //Lose a life if bottom edge hit
@@ -196,7 +209,7 @@ void moveBall()
       yb=60;
       released = false;
       lives--;
-      playToneTimed(175, 500);
+      audio.tone(175, 250);
       if (random(0, 2) == 0)
       {
         dx = 1;
@@ -212,7 +225,7 @@ void moveBall()
     {
       xb = 2;
       dx = -dx;
-      playTone(523, 250);
+      audio.tone(523, 250);
     }
 
     //Bounce off right side
@@ -220,7 +233,7 @@ void moveBall()
     {
       xb = WIDTH - 4;
       dx = -dx;
-      playTone(523, 250);
+      audio.tone(523, 250);
     }
 
     //Bounce off paddle
@@ -232,7 +245,7 @@ void moveBall()
       if (dx == 0) {
         dx = (random(0,2) == 1) ? 1 : -1;
       }
-      playTone(200, 250);
+      audio.tone(200, 250);
     }
 
     //Bounce off Bricks
@@ -266,7 +279,7 @@ void moveBall()
                 dy =- dy;
                 yb += dy;
                 bounced = true;
-                playTone(261, 250);
+                audio.tone(261, 250);
               }
             }
 
@@ -279,7 +292,7 @@ void moveBall()
                 dx =- dx;
                 xb += dx;
                 bounced = true;
-                playTone(261, 250);
+                audio.tone(261, 250);
               }
             }
           }
@@ -295,7 +308,7 @@ void moveBall()
     xb=xPaddle + 5;
 
     //Release ball if FIRE pressed
-    pad3 = arduboy.pressed(A_BUTTON) || arduboy.pressed(B_BUTTON);
+    pad3 = arduboy.pressed(Y_BUTTON) || arduboy.pressed(X_BUTTON);
     if (pad3 == true && oldpad3 == false)
     {
       released = true;
@@ -353,7 +366,7 @@ void drawGameOver()
   arduboy.print("Score: ");
   arduboy.print(score);
   arduboy.display();
-  arduboy.delayShort(4000);
+  delay(4000);
 }
 
 void pause()
@@ -365,9 +378,9 @@ void pause()
   arduboy.display();
   while (paused)
   {
-    arduboy.delayShort(150);
+    delay(150);
     //Unpause if FIRE is pressed
-    pad2 = arduboy.pressed(A_BUTTON) || arduboy.pressed(B_BUTTON);
+    pad2 = arduboy.pressed(Y_BUTTON) || arduboy.pressed(X_BUTTON);
     if (pad2 == true && oldpad2 == false && released)
     {
         arduboy.fillRect(52, 45, 30, 11, 0);
@@ -383,7 +396,8 @@ void Score()
   score += (level*10);
 }
 
-void newLevel(){
+void newLevel()
+{
   //Undraw paddle
   arduboy.drawRect(xPaddle, 63, 11, 1, 0);
 
@@ -408,7 +422,8 @@ void newLevel(){
     }
   }
 
-  arduboy.display();
+  if (!initialDraw) arduboy.clear();
+  else arduboy.display();
 }
 
 //Used to delay images while reading button input
@@ -416,8 +431,8 @@ boolean pollFireButton(int n)
 {
   for(int i = 0; i < n; i++)
   {
-    arduboy.delayShort(15);
-    pad = arduboy.pressed(A_BUTTON) || arduboy.pressed(B_BUTTON);
+    delay(15);
+    pad = arduboy.pressed(Y_BUTTON) || arduboy.pressed(X_BUTTON);
     if(pad == true && oldpad == false)
     {
       oldpad3 = true; //Forces pad loop 3 to run once
@@ -433,51 +448,50 @@ boolean displayHighScores(byte file)
 {
   byte y = 8;
   byte x = 24;
-  // Each block of EEPROM has 7 high scores, and each high score entry
+  // Each block of EEPROM has 10 high scores, and each high score entry
   // is 5 bytes long:  3 bytes for initials and two bytes for score.
-  int address = file * 7 * 5 + EEPROM_STORAGE_SPACE_START;
+  int address = 0;
   byte hi, lo;
-  arduboy.clear();
-  arduboy.setCursor(32, 0);
+
+  arduboy.fillScreen(BLACK);
+  arduboy.setTextColor(WHITE);
+  arduboy.setCursor(32,0);
   arduboy.print("HIGH SCORES");
-  arduboy.display();
 
-  for(int i = 0; i < 7; i++)
-  {
-    sprintf(text_buffer, "%2d", i+1);
-    arduboy.setCursor(x,y+(i*8));
-    arduboy.print(text_buffer);
-    arduboy.display();
-    hi = EEPROM.read(address + (5*i));
-    lo = EEPROM.read(address + (5*i) + 1);
+  mem.load();
 
-    if ((hi == 0xFF) && (lo == 0xFF))
-    {
+  for (int i = 0; i < NBR_HIGH_SCORES; i++) {
+    sprintf(s, "%2d", i + 1);
+
+    arduboy.setCursor(x, y + (i * 8));
+    arduboy.print(s);
+
+    hi = mem.read(address + (5 * i));
+    lo = mem.read(address + (5 * i) + 1);
+    if ((hi == 0xFF) && (lo == 0xFF)) {
       score = 0;
-    }
-    else
-    {
+    } else {
       score = (hi << 8) | lo;
     }
+    initials[0] = (char)mem.read(address + (5 * i) + 2);
+    initials[1] = (char)mem.read(address + (5 * i) + 3);
+    initials[2] = (char)mem.read(address + (5 * i) + 4);
 
-    initials[0] = (char)EEPROM.read(address + (5*i) + 2);
-    initials[1] = (char)EEPROM.read(address + (5*i) + 3);
-    initials[2] = (char)EEPROM.read(address + (5*i) + 4);
-
-    if (score > 0)
-    {
-      sprintf(text_buffer, "%c%c%c %u", initials[0], initials[1], initials[2], score);
-      arduboy.setCursor(x + 24, y + (i*8));
-      arduboy.print(text_buffer);
-      arduboy.display();
+    if (score > 0) {
+      sprintf(s, "%c%c%c %u", initials[0], initials[1], initials[2], score);
+      arduboy.setCursor(x + 24, y + (i * 8));
+      arduboy.print(s);
     }
   }
-  if (pollFireButton(300))
-  {
+
+  arduboy.display();
+
+  delay(300);
+
+  if (pollFireButton(300)) {
     return true;
   }
   return false;
-  arduboy.display();
 }
 
 boolean titleScreen()
@@ -524,83 +538,79 @@ boolean titleScreen()
 //Function by nootropic design to add high scores
 void enterInitials()
 {
-  byte index = 0;
+  int index = 0;
 
-  arduboy.clear();
+  // Lower the frame rate otherwise the intials input is too fast
+  arduboy.setFrameRate(MENU_FRAME_RATE);
+
+  arduboy.fillScreen(BLACK);
+  arduboy.setTextColor(WHITE);
+  arduboy.setCursor(16, 0);
+  arduboy.print("HIGH SCORE");
+  sprintf(s, "%u", score);
+  arduboy.setCursor(88, 0);
+  arduboy.print(s);
 
   initials[0] = ' ';
   initials[1] = ' ';
   initials[2] = ' ';
 
-  while (true)
-  {
-    arduboy.display();
-    arduboy.clear();
+  delay(300);
 
-    arduboy.setCursor(16,0);
-    arduboy.print("HIGH SCORE");
-    sprintf(text_buffer, "%u", score);
-    arduboy.setCursor(88, 0);
-    arduboy.print(text_buffer);
+  while (true) {
+    if (!arduboy.nextFrame()) {
+      continue; // go back to the start of the loop
+    }
+
     arduboy.setCursor(56, 20);
     arduboy.print(initials[0]);
     arduboy.setCursor(64, 20);
     arduboy.print(initials[1]);
     arduboy.setCursor(72, 20);
     arduboy.print(initials[2]);
-    for(byte i = 0; i < 3; i++)
-    {
-      arduboy.drawLine(56 + (i*8), 27, 56 + (i*8) + 6, 27, 1);
+    for (byte i = 0; i < 3; i++) {
+      arduboy.drawLine(56 + (i * 8), 27, 56 + (i * 8) + 6, 27, 1);
     }
     arduboy.drawLine(56, 28, 88, 28, 0);
-    arduboy.drawLine(56 + (index*8), 28, 56 + (index*8) + 6, 28, 1);
-    arduboy.delayShort(70);
+    arduboy.drawLine(56 + (index * 8), 28, 56 + (index * 8) + 6, 28, 1);
 
-    if (arduboy.pressed(LEFT_BUTTON) || arduboy.pressed(B_BUTTON))
-    {
-      if (index > 0)
-      {
-        index--;
-        playToneTimed(1046, 80);
+    delay(50);
+    if (arduboy.pressed(LEFT_BUTTON)) {
+      index--;
+      if (index < 0) {
+        index = 0;
+      } else {
+        audio.tone(1046, 20);
       }
     }
-
-    if (arduboy.pressed(RIGHT_BUTTON))
-    {
-      if (index < 2)
-      {
-        index++;
-        playToneTimed(1046, 80);
+    if (arduboy.pressed(RIGHT_BUTTON)) {
+      index++;
+      if (index > 2) {
+        index = 2;
+      } else {
+        audio.tone(1046, 20);
       }
     }
-
-    if (arduboy.pressed(UP_BUTTON))
-    {
+    if (arduboy.pressed(UP_BUTTON)) {
       initials[index]++;
-      playToneTimed(523, 80);
+      audio.tone(523, 20);
       // A-Z 0-9 :-? !-/ ' '
-      if (initials[index] == '0')
-      {
+      if (initials[index] == '0') {
         initials[index] = ' ';
       }
-      if (initials[index] == '!')
-      {
+      if (initials[index] == '!') {
         initials[index] = 'A';
       }
-      if (initials[index] == '[')
-      {
+      if (initials[index] == '[') {
         initials[index] = '0';
       }
-      if (initials[index] == '@')
-      {
+      if (initials[index] == '@') {
         initials[index] = '!';
       }
     }
-
-    if (arduboy.pressed(DOWN_BUTTON))
-    {
+    if (arduboy.pressed(DOWN_BUTTON)) {
       initials[index]--;
-      playToneTimed(523, 80);
+      audio.tone(523, 20);
       if (initials[index] == ' ') {
         initials[index] = '?';
       }
@@ -614,103 +624,77 @@ void enterInitials()
         initials[index] = ' ';
       }
     }
-
-    if (arduboy.pressed(A_BUTTON))
-    {
-      playToneTimed(1046, 80);
-      if (index < 2)
-      {
+    if (arduboy.pressed(Y_BUTTON) || arduboy.pressed(X_BUTTON)) {
+      if (index < 2) {
         index++;
+        audio.tone(1046, 20);
       } else {
+        audio.tone(1046, 20);
+
+        // Go back to standard frame rate
+        arduboy.setFrameRate(BASE_FRAME_RATE);
         return;
       }
     }
+    arduboy.display();
   }
-
 }
 
 void enterHighScore(byte file)
 {
-  // Each block of EEPROM has 7 high scores, and each high score entry
+  // Each block of EEPROM has 10 high scores, and each high score entry
   // is 5 bytes long:  3 bytes for initials and two bytes for score.
-  int address = file * 7 * 5 + EEPROM_STORAGE_SPACE_START;
-  byte hi, lo;
+  int address = 0;
+  uint8_t hi, lo;
   char tmpInitials[3];
   unsigned int tmpScore = 0;
 
+  mem.load();
+
   // High score processing
-  for(byte i = 0; i < 7; i++)
-  {
-    hi = EEPROM.read(address + (5*i));
-    lo = EEPROM.read(address + (5*i) + 1);
-    if ((hi == 0xFF) && (lo == 0xFF))
-    {
+  for (byte i = 0; i < NBR_HIGH_SCORES; i++) {
+    hi = mem.read(address + (5 * i));
+    lo = mem.read(address + (5 * i) + 1);
+    if ((hi == 0xFF) && (lo == 0xFF)) {
       // The values are uninitialized, so treat this entry
       // as a score of 0.
       tmpScore = 0;
-    } else
-    {
+    } else {
       tmpScore = (hi << 8) | lo;
     }
-    if (score > tmpScore)
-    {
+    if (score > tmpScore) {
       enterInitials();
-      for(byte j = i; j < 7; j++)
-      {
-        hi = EEPROM.read(address + (5*j));
-        lo = EEPROM.read(address + (5*j) + 1);
-
-        if ((hi == 0xFF) && (lo == 0xFF))
-        {
-        tmpScore = 0;
-        }
-        else
-        {
+      for (byte j = i; j < 10; j++) {
+        hi = mem.read(address + (5 * j));
+        lo = mem.read(address + (5 * j) + 1);
+        if ((hi == 0xFF) && (lo == 0xFF)) {
+          tmpScore = 0;
+        } else {
           tmpScore = (hi << 8) | lo;
         }
+        tmpInitials[0] = (char)mem.read(address + (5 * j) + 2);
+        tmpInitials[1] = (char)mem.read(address + (5 * j) + 3);
+        tmpInitials[2] = (char)mem.read(address + (5 * j) + 4);
 
-        tmpInitials[0] = (char)EEPROM.read(address + (5*j) + 2);
-        tmpInitials[1] = (char)EEPROM.read(address + (5*j) + 3);
-        tmpInitials[2] = (char)EEPROM.read(address + (5*j) + 4);
+        // tmpScore and tmpInitials now hold what we want to write in the next slot.
 
         // write score and initials to current slot
-        EEPROM.update(address + (5*j), ((score >> 8) & 0xFF));
-        EEPROM.update(address + (5*j) + 1, (score & 0xFF));
-        EEPROM.update(address + (5*j) + 2, initials[0]);
-        EEPROM.update(address + (5*j) + 3, initials[1]);
-        EEPROM.update(address + (5*j) + 4, initials[2]);
-
-        // tmpScore and tmpInitials now hold what we want to
-        //write in the next slot.
+        mem.write(address + (5 * j), ((score >> 8) & 0xFF));
+        mem.write(address + (5 * j) + 1, (score & 0xFF));
+        mem.write(address + (5 * j) + 2, initials[0]);
+        mem.write(address + (5 * j) + 3, initials[1]);
+        mem.write(address + (5 * j) + 4, initials[2]);
         score = tmpScore;
         initials[0] = tmpInitials[0];
         initials[1] = tmpInitials[1];
         initials[2] = tmpInitials[2];
       }
-
       score = 0;
       initials[0] = ' ';
       initials[1] = ' ';
       initials[2] = ' ';
-
+      mem.save();
       return;
     }
   }
 }
-
-// Play a tone at the specified frequency for the specified duration.
-void playTone(unsigned int frequency, unsigned int duration)
-{
-  beep.tone(beep.freq(frequency), duration / (1000 / FRAME_RATE));
-}
-
-// Play a tone at the specified frequency for the specified duration using
-// a delay to time the tone.
-// Used when beep.timer() isn't being called.
-void playToneTimed(unsigned int frequency, unsigned int duration)
-{
-  beep.tone(beep.freq(frequency));
-  arduboy.delayShort(duration);
-  beep.noTone();
-}
-
